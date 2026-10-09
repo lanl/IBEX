@@ -1,0 +1,29 @@
+CC = gcc
+CFLAGS= -O2 -W -DDO_PS
+# DEFS= -D__USE_ISOC99
+INCLUDES= -I../localccsds -I../mpfit -I../../spice
+
+OBJS = asa239.o  crc.o externs.o    isoofs.o   pprintf.o  readhb.o  retcol.o \
+	bursts.o hbunhb.o makexpm.o processcull.o readpointing.o vectors.o \
+	mpfit.o dode.o hi_de_gbc.o osdb.o processhb.o realspice.o Hi_cal.o \
+	realspice.o util.o iongun.o penbg.o readewind.o readsweep.o \
+	sheath.o sepsearch.o readhk.o hi_de_pj.o decull.o spininfo.o
+
+
+all: libibexhi
+
+libibexhi: $(OBJS) 
+		ar cq libibexhi.a $(OBJS)
+		ranlib libibexhi.a
+
+Hi_cal.o:
+		$(CC) -c $(INCLUDES) $(DEFS) $(CFLAGS) ../response/Hi_cal.c
+
+mpfit.o:
+		$(CC) -c $(INCLUDES) $(DEFS) $(CFLAGS) ../mpfit/mpfit.c
+
+.c.o: 
+		$(CC) -c $(INCLUDES) $(DEFS) $(CFLAGS) $<
+
+clean:
+	rm -f $(OBJS) libibexhi.a

@@ -1,0 +1,461 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jul 10 18:30:43 2023
+
+@author: 340522
+"""
+
+import numpy as np
+import scipy.integrate as integrate
+import scipy
+import pdb
+import concurrent
+import multiprocessing
+import itertools
+from IBEX import status_bar
+
+def idl_tabulate(x, f, p=5) :
+    def newton_cotes(x, f) :
+        if x.shape[0] < 2 :
+            return 0
+        rn = (x.shape[0] - 1) * (x - x[0]) / (x[-1] - x[0])
+        weights = scipy.integrate.newton_cotes(rn)[0]
+        return (x[-1] - x[0]) / (x.shape[0] - 1) * np.dot(weights, f)
+    ret = 0
+    for idx in range(0, x.shape[0], p - 1) :
+        ret += newton_cotes(x[idx:idx + p], f[idx:idx + p])
+    return ret
+
+def t_calc(input_flux, input_flux_sigma, loop_idx1, loop_idx2, loop_idx3):
+    
+    flux          = np.copy(input_flux)
+    flux_sigma    = np.copy(input_flux_sigma)
+    
+    dpl_arr       = np.empty(np.shape(flux))
+    dplerr_arr    = np.empty(np.shape(flux))
+    
+    zero_idx = np.argwhere(input_flux == 0).flatten()
+    
+    if len(zero_idx) > 1:
+        
+        return (np.empty(6, dtype=np.float64),
+                np.empty(6, dtype=np.float64),
+                np.array(loop_idx1, dtype=int), 
+                np.array(loop_idx2, dtype=int),
+                np.array(loop_idx3, dtype=int))
+
+    
+    #central energies
+    enert = np.array([0.45, 0.71, 1.11, 1.74, 2.73, 4.29])
+    
+    log_f      = np.log(flux[1:6])
+    log_e      = np.log(enert[1:6])
+    kappa_f    = np.empty(6)
+    enerf      = np.empty(7)
+    enerf  [0] = 0.57
+    enerf[1:6] = enert[1:6]
+    enerf  [6] = 6
+    
+    for i in range(0, 4):
+        
+        kappa_f[i+1] = -np.divide((log_f[i+1]-log_f[i]),(log_e[i+1]-log_e[i]))
+        
+    #spectral indices for the ends are set to the adjacent ones
+    kappa_f[0] = kappa_f[1]
+    kappa_f[5] = kappa_f[4]
+    
+    pflux      = np.empty(6)
+    pflux[1:6] = flux[1:6]
+    
+    #determine flux for the lowest energy (0.52 keV) by extrapolation of the power law
+    pflux[0] = pflux[1] * np.power((enerf[0]/enerf[1]),(-kappa_f[0]))
+    
+    #calculate partial pressures for each of the 'nmap' for spectra for IBEX
+    
+    #energy ranges for the 5 ESA steps
+
+    bot_e       = np.empty(5)
+    bot_e   [0] = 0.57
+    bot_e [1:5] = np.sqrt(enert[1:5] * enert[2:6])
+    mid_e       = np.copy(enert[1:6])
+    top_e       = np.empty(5)
+    top_e [0:4] = np.sqrt(enert[1:5]*enert[2:6])
+    top_e [4]   = 6
+    
+    #initialize partial pressure arrays
+    dpl      = np.empty(5)
+    dpl_test = np.empty(5)
+    dplerr   = np.empty(5)
+    
+    flux  = np.copy(pflux)
+    kappa = np.copy(kappa_f)
+    
+    mh       = 1.67e-24 #grams
+    nh       = 0.127    #cm^-3  After Swaczyna et al. 2020
+    kev2ergs = 1.602e-9  #ergs/keV
+    k        = 1.381e-16 #erg/K
+    pico     = 1e-12
+    au       = 1.496e13 #cm
+    ergs2ev  = 624150907446.1 
+    
+    for e_loop in range(0,5):
+        
+        tmp_e_top    = top_e[4]
+        tmp_e_bottom = bot_e[0]
+    
+        tmp_sig_bottom = np.power(4.15 - 0.531*np.log(tmp_e_bottom),2.)*np.power(1. - np.exp(-67.3/tmp_e_bottom),4.5) * 1e-16
+        tmp_dP0_bottom_u=2.*np.sqrt(tmp_e_bottom*kev2ergs)/(3.*tmp_sig_bottom)
+        tmp_dP0_bottom_d=1./(np.sqrt(tmp_e_bottom*kev2ergs)*tmp_sig_bottom)
+            
+        # tmp_dP0_bottom = 4.*np.pi*np.sqrt(2.*mh)*np.sqrt(tmp_e_bottom*kev2ergs)/(3.*tmp_sig_bottom*nh)/au
+  
+        tmp_sig_top    = np.power(4.15 - 0.531*np.log(tmp_e_top),2.)*np.power(1. - np.exp(-67.3/tmp_e_top),4.5) * 1e-16
+        tmp_dP0_top_u  = 2.*np.sqrt(tmp_e_top*kev2ergs)/(3.*tmp_sig_top)
+        tmp_dP0_top_d  = 1./(np.sqrt(tmp_e_top*kev2ergs)*tmp_sig_top)
+            
+        # tmp_dP0_top    = 4.*np.pi*np.sqrt(2.*mh)*np.sqrt(tmp_e_top*kev2ergs)/(3.*tmp_sig_top*nh)/au
+    
+        nener = len(enerf) - 1
+        
+        for i in range(nener-1,-1,-1):
+            if tmp_e_bottom >= enerf[i]:
+                break
+        tmp_f_bottom_u = tmp_dP0_bottom_u*pflux[i]*np.power(np.divide(tmp_e_bottom,enerf[i]),(-kappa_f[i]))/pico
+        tmp_f_bottom_d = tmp_dP0_bottom_d*pflux[i]*np.power(np.divide(tmp_e_bottom,enerf[i]),(-kappa_f[i]))/pico
+        
+        nener = len(enerf) - 1
+        
+        for i in range(nener-1,-1,-1):
+            if tmp_e_top >= enerf[i]:
+                break
+        
+        tmp_f_top_u = tmp_dP0_top_u*pflux[i]*np.power(np.divide(tmp_e_top,enerf[i]),(-kappa_f[i]))/pico
+        tmp_f_top_d = tmp_dP0_top_d*pflux[i]*np.power(np.divide(tmp_e_top,enerf[i]),(-kappa_f[i]))/pico
+        
+        tmp_e_arr   = np.array([tmp_e_bottom, tmp_e_top])
+        tmp_f_arr_u = np.array([tmp_f_bottom_u, tmp_f_top_u]) 
+        tmp_f_arr_d = np.array([tmp_f_bottom_d, tmp_f_top_d])
+        
+        # dpl [e_loop]     = idl_tabulate(tmp_e_arr, tmp_f_arr) #too slow
+        dpl_u=integrate.trapezoid(tmp_f_arr_u, tmp_e_arr)
+        dpl_d=integrate.trapezoid(tmp_f_arr_d, tmp_e_arr)
+        
+        dpl [e_loop] = dpl_u/dpl_d * ergs2ev
+
+        
+    # ; to determin error, we scale the partial press by fractional error in the
+    # ; flux associated with the corresponding ESAs.  This is not a precise calc
+    # ; of the error, as it depends on the fluxes in the adjacent steps as well,
+    # ; but it will have to do, since the exact error calc is too complicated to be
+    # ; worth the effort.
+    dplerr = dpl * np.divide(flux_sigma[1:6],flux[1:6])
+      
+    #return 6 elements
+      
+    temperature             = np.empty(6)
+    temperature         [0] = 0.
+    temperature       [1:6] = dpl
+    temperature_sigma       = np.empty(6)
+    temperature_sigma   [0] = 0.
+    temperature_sigma [1:6] = dplerr  
+
+    return (np.array(temperature, dtype=np.float64),
+            np.array(temperature_sigma, dtype=np.float64),
+            np.array(loop_idx1, dtype=int), 
+            np.array(loop_idx2, dtype=int),
+            np.array(loop_idx3, dtype=int))
+
+def t_calc_parallel(input_flux, input_flux_sigma):
+    
+    #use this if flux and fluxerr is two dimension or more (e.g., flux array with (lat,lon,ESA) or (lat, ESA)).
+    #uses parallel computation utilizing 100% of the CPU power.
+    
+    null = 0
+    
+    if len(input_flux.shape) == 2:
+        
+        temperature_arr       = np.zeros((np.shape(input_flux)[0], 6), dtype=np.float64)
+        temperature_sigma_arr = np.zeros((np.shape(input_flux)[0], 6), dtype=np.float64)
+        
+        angle_dim  = range(0, np.shape(input_flux)[0])
+        
+        with concurrent.futures.ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+        
+            executors = {executor.submit(t_calc, input_flux[angle_index,:], input_flux_sigma[angle_index,:], angle_index, null, null): angle_index for angle_index in angle_dim}
+            
+            for exe in concurrent.futures.as_completed(executors):
+
+                result                      = exe.result()
+                temperature_arr       [result[2],:] = result[0]
+                temperature_sigma_arr [result[2],:] = result[1]
+    
+    if len(input_flux.shape) == 3:
+        
+        temperature_arr       = np.zeros((np.shape(input_flux)[0], np.shape(input_flux)[1], 6), dtype=np.float64)
+        temperature_sigma_arr = np.zeros((np.shape(input_flux)[0], np.shape(input_flux)[1], 6), dtype=np.float64)
+        
+        angle_dim         = range(0, np.shape(input_flux)[0])
+        angle_dim1        = range(0, np.shape(input_flux)[1])
+        merged_angle_dim1 = itertools.product(angle_dim, angle_dim1)
+        
+        with concurrent.futures.ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+        
+            executors = {executor.submit(t_calc, input_flux[angle_index[0],angle_index[1],:], input_flux_sigma[angle_index[0],angle_index[1],:], angle_index[0], angle_index[1], null): angle_index for angle_index in merged_angle_dim1}
+            
+            for exe in concurrent.futures.as_completed(executors):
+
+                result                      = exe.result()
+                temperature_arr       [result[2],result[3],:] = result[0]
+                temperature_sigma_arr [result[2],result[3],:] = result[1]
+                
+    if len(input_flux.shape) == 4:
+        
+        temperature_arr       = np.zeros((np.shape(input_flux)[0], np.shape(input_flux)[1],  np.shape(input_flux)[2], 6), dtype=np.float64)
+        temperature_sigma_arr = np.zeros((np.shape(input_flux)[0], np.shape(input_flux)[1],  np.shape(input_flux)[2], 6), dtype=np.float64)
+        
+        angle_dim         = range(0, np.shape(input_flux)[0])
+        angle_dim1        = range(0, np.shape(input_flux)[1])
+        angle_dim2        = range(0, np.shape(input_flux)[2])
+        merged_angle_dim1 = itertools.product(angle_dim, angle_dim1, angle_dim2)
+        
+        with concurrent.futures.ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+        
+            executors = {executor.submit(t_calc, input_flux[angle_index[0],angle_index[1],angle_index[2],:], input_flux_sigma[angle_index[0],angle_index[1],angle_index[2],:], angle_index[0], angle_index[1], angle_index[2]): angle_index for angle_index in merged_angle_dim1}
+            
+            # step=0
+            
+            for exe in concurrent.futures.as_completed(executors):
+
+                result                                = exe.result()
+                
+                temperature_arr       [result[2],result[3],result[4],:] = result[0]
+                temperature_sigma_arr [result[2],result[3],result[4],:] = result[1]
+                
+                # step += 1
+                # status_bar.percent_complete(step, np.shape(input_flux)[0]+np.shape(input_flux)[1]+np.shape(input_flux)[2], bar_width=60, title="Calculating LOS ENA Pressure", print_perc=True)
+    
+    temperature_arr       [np.isnan(temperature_arr)]       = 0.
+    temperature_sigma_arr [np.isnan(temperature_sigma_arr)] = 0.
+    
+    return (np.array(temperature_arr, dtype=np.float64), 
+            np.array(temperature_sigma_arr, dtype=np.float64))
+
+def p_calc(input_flux, input_flux_sigma, loop_idx1, loop_idx2, loop_idx3, temperature=0):
+    
+    flux          = np.copy(input_flux)
+    flux_sigma    = np.copy(input_flux_sigma)
+    
+    dpl_arr       = np.empty(np.shape(flux))
+    dplerr_arr    = np.empty(np.shape(flux))
+    
+    zero_idx = np.argwhere(input_flux == 0).flatten()
+    
+    if len(zero_idx) > 1:
+        
+        return (np.empty(6, dtype=np.float64),
+                np.empty(6, dtype=np.float64),
+                np.array(loop_idx1, dtype=int), 
+                np.array(loop_idx2, dtype=int),
+                np.array(loop_idx3, dtype=int))
+
+    
+    #central energies
+    enert = np.array([0.45, 0.71, 1.11, 1.74, 2.73, 4.29])
+    
+    log_f      = np.log(flux[1:6])
+    log_e      = np.log(enert[1:6])
+    kappa_f    = np.empty(6)
+    enerf      = np.empty(7)
+    enerf  [0] = 0.57
+    enerf[1:6] = enert[1:6]
+    enerf  [6] = 6
+    
+    for i in range(0, 4):
+        
+        kappa_f[i+1] = -np.divide((log_f[i+1]-log_f[i]),(log_e[i+1]-log_e[i]))
+        
+    #spectral indices for the ends are set to the adjacent ones
+    kappa_f[0] = kappa_f[1]
+    kappa_f[5] = kappa_f[4]
+    
+    pflux      = np.empty(6)
+    pflux[1:6] = flux[1:6]
+    
+    #determine flux for the lowest energy (0.52 keV) by extrapolation of the power law
+    pflux[0] = pflux[1] * np.power((enerf[0]/enerf[1]),(-kappa_f[0]))
+    
+    #calculate partial pressures for each of the 'nmap' for spectra for IBEX
+    
+    #energy ranges for the 5 ESA steps
+
+    bot_e       = np.empty(5)
+    bot_e   [0] = 0.57
+    bot_e [1:5] = np.sqrt(enert[1:5] * enert[2:6])
+    mid_e       = np.copy(enert[1:6])
+    top_e       = np.empty(5)
+    top_e [0:4] = np.sqrt(enert[1:5]*enert[2:6])
+    top_e [4]   = 6
+    
+    #initialize partial pressure arrays
+    dpl      = np.empty(5)
+    dpl_test = np.empty(5)
+    dplerr   = np.empty(5)
+    
+    flux  = np.copy(pflux)
+    kappa = np.copy(kappa_f)
+    
+    mh       = 1.67e-24 #grams
+    nh       = 0.127    #cm^-3  After Swaczyna et al. 2020
+    kev2ergs = 1.602e-9  #ergs/keV
+    k        = 1.381e-16 #erg/K
+    pico     = 1e-12
+    au       = 1.496e13 #cm
+    ergs2ev  = 624150907446.1 
+    
+    for e_loop in range(0,5):
+        
+        tmp_e_top    = top_e[e_loop]
+        tmp_e_bottom = bot_e[e_loop]
+    
+        tmp_sig_bottom = np.power(4.15 - 0.531*np.log(tmp_e_bottom),2.)*np.power(1. - np.exp(-67.3/tmp_e_bottom),4.5) * 1e-16
+        tmp_dP0_bottom_u=2.*np.sqrt(tmp_e_bottom*kev2ergs)/(3.*tmp_sig_bottom)
+        tmp_dP0_bottom_d=1./(np.sqrt(tmp_e_bottom*kev2ergs)*tmp_sig_bottom)
+            
+        tmp_dP0_bottom = 4.*np.pi*np.sqrt(2.*mh)*np.sqrt(tmp_e_bottom*kev2ergs)/(3.*tmp_sig_bottom*nh)/au
+  
+        tmp_sig_top    = np.power(4.15 - 0.531*np.log(tmp_e_top),2.)*np.power(1. - np.exp(-67.3/tmp_e_top),4.5) * 1e-16
+        tmp_dP0_top_u  = 2.*np.sqrt(tmp_e_top*kev2ergs)/(3.*tmp_sig_top)
+        tmp_dP0_top_d  = 1./(np.sqrt(tmp_e_top*kev2ergs)*tmp_sig_top)
+            
+        tmp_dP0_top    = 4.*np.pi*np.sqrt(2.*mh)*np.sqrt(tmp_e_top*kev2ergs)/(3.*tmp_sig_top*nh)/au
+    
+        nener = len(enerf) - 1
+        
+        for i in range(nener-1,-1,-1):
+            if tmp_e_bottom >= enerf[i]:
+                break
+        tmp_f_bottom_u = tmp_dP0_bottom_u*pflux[i]*np.power(np.divide(tmp_e_bottom,enerf[i]),(-kappa_f[i]))/pico
+        tmp_f_bottom_d = tmp_dP0_bottom_d*pflux[i]*np.power(np.divide(tmp_e_bottom,enerf[i]),(-kappa_f[i]))/pico
+        tmp_f_bottom   = tmp_dP0_bottom*pflux[i]*np.power(np.divide(tmp_e_bottom,enerf[i]),(-kappa_f[i]))/pico
+        
+        nener = len(enerf) - 1
+        
+        for i in range(nener-1,-1,-1):
+            if tmp_e_top >= enerf[i]:
+                break
+        
+        tmp_f_top_u = tmp_dP0_top_u*pflux[i]*np.power(np.divide(tmp_e_top,enerf[i]),(-kappa_f[i]))/pico
+        tmp_f_top_d = tmp_dP0_top_d*pflux[i]*np.power(np.divide(tmp_e_top,enerf[i]),(-kappa_f[i]))/pico
+        tmp_f_top   = tmp_dP0_top*pflux[i]*np.power(np.divide(tmp_e_top,enerf[i]),(-kappa_f[i]))/pico
+        
+        tmp_e_arr   = np.array([tmp_e_bottom, tmp_e_top])
+        tmp_f_arr   = np.array([tmp_f_bottom, tmp_f_top])
+        tmp_f_arr_u = np.array([tmp_f_bottom_u, tmp_f_top_u]) 
+        tmp_f_arr_d = np.array([tmp_f_bottom_d, tmp_f_top_d])
+        
+        # dpl [e_loop]     = idl_tabulate(tmp_e_arr, tmp_f_arr) #too slow
+        if temperature == 0:
+            dpl [e_loop] = integrate.trapezoid(tmp_f_arr, tmp_e_arr)
+        else:
+            dpl_u=integrate.trapezoid(tmp_f_arr_u, tmp_e_arr)
+            dpl_d=integrate.trapezoid(tmp_f_arr_d, tmp_e_arr)
+            
+            dpl [e_loop] = dpl_u/dpl_d * ergs2ev
+
+        
+    # ; to determin error, we scale the partial press by fractional error in the
+    # ; flux associated with the corresponding ESAs.  This is not a precise calc
+    # ; of the error, as it depends on the fluxes in the adjacent steps as well,
+    # ; but it will have to do, since the exact error calc is too complicated to be
+    # ; worth the effort.
+    dplerr = dpl * np.divide(flux_sigma[1:6],flux[1:6])
+      
+    #return 6 elements
+      
+    pressure             = np.empty(6)
+    pressure         [0] = 0.
+    pressure       [1:6] = dpl
+    pressure_sigma       = np.empty(6)
+    pressure_sigma   [0] = 0.
+    pressure_sigma [1:6] = dplerr  
+
+    return (np.array(pressure, dtype=np.float64),
+            np.array(pressure_sigma, dtype=np.float64),
+            np.array(loop_idx1, dtype=int), 
+            np.array(loop_idx2, dtype=int),
+            np.array(loop_idx3, dtype=int))
+
+def p_calc_parallel(input_flux, input_flux_sigma):
+    
+    #use this if flux and fluxerr is two dimension or more (e.g., flux array with (lat,lon,ESA) or (lat, ESA)).
+    #uses parallel computation utilizing 100% of the CPU power.
+    
+    null = 0
+    
+    if len(input_flux.shape) == 2:
+        
+        pressure_arr       = np.zeros((np.shape(input_flux)[0], 6), dtype=np.float64)
+        pressure_sigma_arr = np.zeros((np.shape(input_flux)[0], 6), dtype=np.float64)
+        
+        angle_dim  = range(0, np.shape(input_flux)[0])
+        
+        with concurrent.futures.ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+        
+            executors = {executor.submit(p_calc, input_flux[angle_index,:], input_flux_sigma[angle_index,:], angle_index, null, null): angle_index for angle_index in angle_dim}
+            
+            for exe in concurrent.futures.as_completed(executors):
+
+                result                      = exe.result()
+                pressure_arr       [result[2],:] = result[0]
+                pressure_sigma_arr [result[2],:] = result[1]
+    
+    if len(input_flux.shape) == 3:
+        
+        pressure_arr       = np.zeros((np.shape(input_flux)[0], np.shape(input_flux)[1], 6), dtype=np.float64)
+        pressure_sigma_arr = np.zeros((np.shape(input_flux)[0], np.shape(input_flux)[1], 6), dtype=np.float64)
+        
+        angle_dim         = range(0, np.shape(input_flux)[0])
+        angle_dim1        = range(0, np.shape(input_flux)[1])
+        merged_angle_dim1 = itertools.product(angle_dim, angle_dim1)
+        
+        with concurrent.futures.ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+        
+            executors = {executor.submit(p_calc, input_flux[angle_index[0],angle_index[1],:], input_flux_sigma[angle_index[0],angle_index[1],:], angle_index[0], angle_index[1], null): angle_index for angle_index in merged_angle_dim1}
+            
+            for exe in concurrent.futures.as_completed(executors):
+
+                result                      = exe.result()
+                pressure_arr       [result[2],result[3],:] = result[0]
+                pressure_sigma_arr [result[2],result[3],:] = result[1]
+                
+    if len(input_flux.shape) == 4:
+        
+        pressure_arr       = np.zeros((np.shape(input_flux)[0], np.shape(input_flux)[1],  np.shape(input_flux)[2], 6), dtype=np.float64)
+        pressure_sigma_arr = np.zeros((np.shape(input_flux)[0], np.shape(input_flux)[1],  np.shape(input_flux)[2], 6), dtype=np.float64)
+        
+        angle_dim         = range(0, np.shape(input_flux)[0])
+        angle_dim1        = range(0, np.shape(input_flux)[1])
+        angle_dim2        = range(0, np.shape(input_flux)[2])
+        merged_angle_dim1 = itertools.product(angle_dim, angle_dim1, angle_dim2)
+        
+        with concurrent.futures.ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+        
+            executors = {executor.submit(p_calc, input_flux[angle_index[0],angle_index[1],angle_index[2],:], input_flux_sigma[angle_index[0],angle_index[1],angle_index[2],:], angle_index[0], angle_index[1], angle_index[2]): angle_index for angle_index in merged_angle_dim1}
+            
+            # step=0
+            
+            for exe in concurrent.futures.as_completed(executors):
+
+                result                                = exe.result()
+                
+                pressure_arr       [result[2],result[3],result[4],:] = result[0]
+                pressure_sigma_arr [result[2],result[3],result[4],:] = result[1]
+                
+                # step += 1
+                # status_bar.percent_complete(step, np.shape(input_flux)[0]+np.shape(input_flux)[1]+np.shape(input_flux)[2], bar_width=60, title="Calculating LOS ENA Pressure", print_perc=True)
+    
+    pressure_arr       [np.isnan(pressure_arr)]       = 0.
+    pressure_sigma_arr [np.isnan(pressure_sigma_arr)] = 0.
+    
+    return (np.array(pressure_arr, dtype=np.float64), 
+            np.array(pressure_sigma_arr, dtype=np.float64))

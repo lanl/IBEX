@@ -1,0 +1,18 @@
+OBJS= DrawingA.o apue.o callbacks.o extern.o kbd.o mappage.o mapread.o \
+	abrate.o healpix.o hist2d.o ipointing.o Xdraw.o Xinit.o xmap.o \
+	Dialog.o menus.o
+# CFLAGS= -g
+CFLAGS+= -W -Wall -DTHREADS -I/usr/X11R6/include -I/usr/local/include
+# Uses vectors.c from libibexhi, but not libibexhi itself.
+CFLAGS+= -W -Wall -I../libibexhi
+LDADD= -L/usr/X11R6/lib -lXaw -lXmu -lXt -lX11 -lcurses -lm -lpthread
+
+all: xmap
+
+xmap: $(OBJS)
+	$(CC) $(CFLAGS) -o xmap $(OBJS) $(LDADD)
+
+clean:
+	rm -f $(OBJS) xmap
+
+

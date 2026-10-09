@@ -1,0 +1,25 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:1.0
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+DTSTAMP:20230104T081100
+UID:1.0
+TZID:America/Denver
+SUMMARY:HPC Training Workshop - Introductory Machine Learning - Regressions
+URL:https://hpctraining.lanl.gov/trainings/218
+DTSTART:20230117T140000
+DTEND:20230118T160000
+LOCATION:LANL HPC Training
+DESCRIPTION:Please visit: https://hpctraining.lanl.gov/trainings/218
+STATUS:CONFIRMED
+SEQUENCE:3
+BEGIN:VALARM
+DESCRIPTION:Please visit: https://hpctraining.lanl.gov/trainings/218
+TRIGGER:-PT60M
+ACTION:DISPLAY
+END:VALARM
+END:VEVENT
+END:VCALENDAR
+
